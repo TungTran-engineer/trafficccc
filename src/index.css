@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #7b00ff;
+  --color-background-light: #f7f5f8;
+  --color-background-dark: #190f23;
+}
+
+@layer base {
+  body {
+    font-family: 'Inter', sans-serif;
+    background-color: #f7f5f8;
+  }
+  
+  /* Màu text mặc định */
+  .text-slate-900 {
+    color: #1e293b !important;
+  }
+  
+  .text-gray-900 {
+    color: #111827 !important;
+  }
+  
+  .text-gray-700 {
+    color: #374151 !important;
+  }
+  
+  .text-gray-600 {
+    color: #4b5563 !important;
+  }
+}
+
+/* Class cho background */
+.bg-background-light {
+  background-color: #f7f5f8 !important;
+}
+
+.bg-white {
+  background-color: #ffffff !important;
+}
