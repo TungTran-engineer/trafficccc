@@ -70,10 +70,7 @@ const menuItems = [
                   System Status: <span className="text-emerald-600 dark:text-emerald-400">Active</span>
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary text-lg">sensors</span>
-                <span className="font-medium text-slate-600 dark:text-slate-400">Network Health: 98%</span>
-              </div>
+
             </div>
 
             <div className="flex items-center gap-2 border-l border-primary/10 pl-6">
@@ -214,42 +211,10 @@ const menuItems = [
             </nav>
 
             {/* Traffic Density Widget in Sidebar */}
-            <div className="mt-auto rounded-xl bg-primary/5 p-4 border border-primary/10">
-              <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-primary">Traffic Density</h3>
-              <div className="space-y-3">
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-500">Downtown</span>
-                    <span className="font-bold text-red-500">88%</span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700">
-                    <div className="h-full w-[88%] rounded-full bg-red-500"></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-500">Expressway A1</span>
-                    <span className="font-bold text-amber-500">62%</span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700">
-                    <div className="h-full w-[62%] rounded-full bg-amber-500"></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-500">Suburbs</span>
-                    <span className="font-bold text-emerald-500">24%</span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700">
-                    <div className="h-full w-[24%] rounded-full bg-emerald-500"></div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </aside>
 
           {/* Main Content */}
-          <main className="relative flex-1 bg-slate-200 dark:bg-slate-900 overflow-auto">
+          <main className="relative flex-1 bg-transparent overflow-hidden">
             {children}
           </main>
         </div>

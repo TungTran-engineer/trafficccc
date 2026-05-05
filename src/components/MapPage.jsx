@@ -239,8 +239,8 @@ export default function SimpleMap() {
       <MapContainer
         center={DEFAULT_CENTER}
         zoom={14}
-        style={{ height: '100%', width: '100%' }}
-        ref={mapRef}
+        style={{ height: '100vh', width: '100%' }}
+        whenCreated={(map) => (mapRef.current = map)}
       >
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
