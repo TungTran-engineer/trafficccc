@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -11,271 +11,298 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-// Custom Icons
-const userIcon = L.divIcon({
-  className: 'custom-div-icon',
-  html: `<div class="relative">
-           <div class="absolute -inset-4 rounded-full bg-blue-500/30 animate-ping"></div>
-           <div class="relative flex size-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg border-2 border-white">
-             <span class="material-symbols-outlined text-[16px] text-white">person</span>
-           </div>
-         </div>`,
-  iconSize: [28, 28],
-  iconAnchor: [14, 14]
-});
+// Điểm mặc định (trung tâm Đà Nẵng)
+const DEFAULT_CENTER = [16.0544, 108.2022];
 
-const destinationIcon = L.divIcon({
-  className: 'custom-div-icon',
-  html: `<div class="relative">
-           <div class="absolute -inset-4 rounded-full bg-red-500/20 animate-pulse"></div>
-           <div class="relative flex size-7 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-red-600 shadow-lg border-2 border-white">
-             <span class="material-symbols-outlined text-[16px] text-white">location_on</span>
-           </div>
-         </div>`,
-  iconSize: [28, 28],
-  iconAnchor: [14, 14]
-});
+// ORS API Key
+const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImJhZmMzZTc1ZWM2YjRiZjA4ZDRkMDA3YTM5ZTNlYzg1IiwiaCI6Im11cm11cjY0In0=";
 
-// Roads Data
-const roadsData = {
-  nguyen_van_linh: { name: "Nguyễn Văn Linh", points: [[16.058838,108.206404],[16.059531,108.208623],[16.060780,108.216995],[16.060959,108.221215]], center: [16.0603,108.214], defaultColor: "#3388ff" },
-  hoang_dieu: { name: "Hoàng Diệu", points: [[16.056950,108.217133],[16.060507,108.217027],[16.063190,108.217922],[16.066223,108.220046]], center: [16.0617,108.218], defaultColor: "#33cc33" },
-  le_duan: { name: "Lê Duẩn", points: [[16.069516,108.209777],[16.070960,108.217014],[16.071733,108.223918]], center: [16.0707,108.2169], defaultColor: "#ff9900" },
-  nguyen_tri_phuong: { name: "Nguyễn Tri Phương", points: [[16.065622,108.202511],[16.062085,108.204406],[16.056987,108.206806]], center: [16.0616,108.2046], defaultColor: "#9900cc" }
-};
-
-export default function MapPage() {
-  const [userLocation, setUserLocation] = useState([16.0544, 108.2022]);
-  const [destination, setDestination] = useState(null);
-  const [routePoints, setRoutePoints] = useState([]);
-  const [routeInfo, setRouteInfo] = useState(null);
+export default function SimpleMap() {
+  // State
   const [searchQuery, setSearchQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [transport, setTransport] = useState('motorcycle'); // Mặc định là Xe máy
-
+  const [isSearching, setIsSearching] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState(null);
+  const [routePoints, setRoutePoints] = useState([]);
+  const [routeInfo, setRouteInfo] = useState(null);
+  const [transport, setTransport] = useState('motorcycle');
+  
   const mapRef = useRef(null);
-  const roadPolylinesRef = useRef({});
+  const searchTimeoutRef = useRef(null);
+  const markerRef = useRef(null);
 
+  // Profile mapping
   const profileMap = {
-    motorcycle: 'cycling-regular',   // ← Xe máy Việt Nam (tốt nhất hiện tại)
+    motorcycle: 'cycling-regular',
     car: 'driving-car',
     walking: 'foot-walking'
   };
 
-  // Get user location
-  useEffect(() => {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setUserLocation([pos.coords.latitude, pos.coords.longitude]),
-      () => console.warn("Không lấy được vị trí")
-    );
-  }, []);
-
-  // Initialize roads
-  const initializeRoads = useCallback((map) => {
-    Object.keys(roadsData).forEach(id => {
-      const road = roadsData[id];
-      const poly = L.polyline(road.points, {
-        color: road.defaultColor,
-        weight: id === 'nguyen_van_linh' ? 6 : 5,
-        opacity: 0
-      }).addTo(map).bindTooltip(road.name, { sticky: true });
-      roadPolylinesRef.current[id] = poly;
-    });
-  }, []);
-
-  const showRoad = (roadId) => {
-    Object.values(roadPolylinesRef.current).forEach(p => p.setStyle({ opacity: 0 }));
-    roadPolylinesRef.current[roadId]?.setStyle({ opacity: 0.9 });
-    mapRef.current?.flyTo(roadsData[roadId].center, 15);
+  // Route colors
+  const routeColors = {
+    motorcycle: '#ff6b6b',
+    car: '#3388ff',
+    walking: '#4ecdc4'
   };
 
-  // ORS Route
-const calculateAndDrawRoute = useCallback(async (start, end) => {
-    if (!start || !end) return;
+  // Format tên hiển thị
+  const formatPlaceName = (displayName) => {
+    const parts = displayName.split(',');
+    return parts.slice(0, 2).join(',');
+  };
 
-    const apiKey = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImJhZmMzZTc1ZWM2YjRiZjA4ZDRkMDA3YTM5ZTNlYzg1IiwiaCI6Im11cm11cjY0In0=";
-    const profile = profileMap[transport];
-
-    const style = {
-      motorcycle: { color: "#ff6b6b", weight: 8, opacity: 0.93 },
-      car: { color: "#3388ff", weight: 8, opacity: 0.90 },
-      walking: { color: "#4ecdc4", weight: 6, opacity: 0.85, dashArray: "5,10" }
-    }[transport];
-
+  // Tìm kiếm địa điểm
+  const searchLocation = async (query) => {
+    if (!query.trim()) return;
+    
+    setIsSearching(true);
+    
     try {
-      const res = await fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
-        method: "POST",
-        headers: { "Authorization": apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          coordinates: [[start[1], start[0]], [end[1], end[0]]],
-          preference: "recommended",           // ← Quan trọng: Ưu tiên đường nhanh + đường to
-          instructions: true,
-          // Options nâng cao để ưu tiên đường lớn hơn
-          options: {
-            avoid_features: ["steps"],     // Tránh bậc thang
-            profile_params: {
-              weightings: {
-                steepness_difficulty: 1,   // Giảm ưu tiên đường dốc nhỏ
-              }
-            }
-          }
-        })
+      const searchUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+        query + ', Đà Nẵng, Việt Nam'
+      )}&format=json&limit=5&addressdetails=1&countrycodes=vn`;
+      
+      const response = await fetch(searchUrl, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'TrafficMapApp/1.0'
+        }
       });
-
-      const data = await res.json();
-      if (!data.features?.length) return;
-
-      const coords = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
-      const summary = data.features[0].properties.summary;
-
-      setRoutePoints(coords);
-      setRouteInfo({
-        distance: (summary.distance / 1000).toFixed(2),
-        duration: Math.round(summary.duration / 60),
-        mode: transport === 'motorcycle' ? 'Xe máy' : transport === 'car' ? 'Ô tô' : 'Đi bộ'
-      });
-
-      mapRef.current?.fitBounds(coords, { padding: [60, 60] });
-    } catch (err) {
-      console.error(err);
+      
+      const data = await response.json();
+      
+      if (data && data.length > 0) {
+        setSuggestions(data);
+        setShowSuggestions(true);
+      } else {
+        setSuggestions([]);
+        alert('Không tìm thấy địa điểm!');
+      }
+    } catch (error) {
+      console.error('Lỗi tìm kiếm:', error);
+      alert('Lỗi kết nối!');
+    } finally {
+      setIsSearching(false);
     }
-  }, [transport]);
+  };
 
+  // Debounce search
   useEffect(() => {
-    if (destination && userLocation) calculateAndDrawRoute(userLocation, destination);
-  }, [transport, destination, userLocation]);
-
-  // ... (phần isRoadNameQuery, findClosestPointOnRoad, handleSearch, suggestions giữ nguyên như lần trước)
-
-  const isRoadNameQuery = (query) => {
-    if (!query) return false;
-    const q = query.toLowerCase().trim();
-    if (/\d/.test(q)) return false;
-    const keywords = ['đường','duong','phố','nguyễn văn linh','hoàng diệu','lê duẩn','nguyễn tri phương'];
-    return keywords.some(kw => q.includes(kw));
-  };
-
-  const findClosestPointOnRoad = async (roadName) => {
-    try {
-      let res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(roadName + ', Đà Nẵng')}&format=json&limit=30&countrycodes=vn`);
-      let data = await res.json();
-      if (!data.length) {
-        res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(roadName)}&format=json&limit=30&countrycodes=vn`);
-        data = await res.json();
-      }
-      const withDist = data.map(p => ({
-        ...p,
-        lat: parseFloat(p.lat),
-        lon: parseFloat(p.lon),
-        dist: L.latLng(userLocation).distanceTo([parseFloat(p.lat), parseFloat(p.lon)])
-      }));
-      withDist.sort((a, b) => a.dist - b.dist);
-      return withDist[0];
-    } catch (e) { return null; }
-  };
-
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-
-    if (isRoadNameQuery(searchQuery)) {
-      const roadId = Object.keys(roadsData).find(id => roadsData[id].name.toLowerCase().includes(searchQuery.toLowerCase()));
-      if (roadId) showRoad(roadId);
-
-      const point = await findClosestPointOnRoad(searchQuery);
-      if (point) {
-        setDestination([point.lat, point.lon]);
-        calculateAndDrawRoute(userLocation, [point.lat, point.lon]);
-      }
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    
+    if (searchQuery.length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
       return;
     }
-
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery + ', Đà Nẵng')}&format=json&limit=1&countrycodes=vn`);
-      const data = await res.json();
-      if (data[0]) {
-        const { lat, lon } = data[0];
-        setDestination([parseFloat(lat), parseFloat(lon)]);
-        calculateAndDrawRoute(userLocation, [parseFloat(lat), parseFloat(lon)]);
+    
+    searchTimeoutRef.current = setTimeout(() => {
+      searchLocation(searchQuery);
+    }, 500);
+    
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
       }
-    } catch (err) { console.error(err); }
-  };
-
-  // Gợi ý
-  useEffect(() => {
-    if (searchQuery.length < 2) { setSuggestions([]); return; }
-    const timeout = setTimeout(async () => {
-      try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery + ', Đà Nẵng')}&format=json&limit=8&countrycodes=vn`);
-        const data = await res.json();
-        setSuggestions(data.map(p => ({
-          ...p,
-          lat: parseFloat(p.lat),
-          lon: parseFloat(p.lon),
-          shortName: p.display_name.split(',')[0]
-        })));
-      } catch (e) {}
-    }, 400);
-    return () => clearTimeout(timeout);
+    };
   }, [searchQuery]);
 
-  const selectSuggestion = (place) => {
-    setSearchQuery(place.shortName);
-    setShowSuggestions(false);
-    setDestination([place.lat, place.lon]);
-
-    if (isRoadNameQuery(place.shortName)) {
-      const roadId = Object.keys(roadsData).find(id => roadsData[id].name.toLowerCase().includes(place.shortName.toLowerCase()));
-      if (roadId) showRoad(roadId);
+  // Xóa marker cũ
+  const clearMarker = () => {
+    if (markerRef.current && mapRef.current) {
+      markerRef.current.remove();
+      markerRef.current = null;
     }
-    calculateAndDrawRoute(userLocation, [place.lat, place.lon]);
   };
 
+  // Thêm marker mới
+  const addMarker = (lat, lng, name) => {
+    clearMarker();
+    
+    const customIcon = L.divIcon({
+      className: 'custom-div-icon',
+      html: `<div class="relative">
+               <div class="relative flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-red-600 shadow-lg border-2 border-white">
+                 <span class="text-white text-sm">📍</span>
+               </div>
+             </div>`,
+      iconSize: [32, 32],
+      iconAnchor: [16, 32]
+    });
+    
+    markerRef.current = L.marker([lat, lng], { icon: customIcon })
+      .addTo(mapRef.current)
+      .bindPopup(name)
+      .openPopup();
+  };
+
+  // Tính route
+  const calculateRoute = async (startLat, startLng, endLat, endLng) => {
+    const profile = profileMap[transport];
+    
+    try {
+      const response = await fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
+        method: 'POST',
+        headers: {
+          'Authorization': ORS_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          coordinates: [[startLng, startLat], [endLng, endLat]],
+          preference: 'recommended'
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.features && data.features.length > 0) {
+        const coords = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+        const summary = data.features[0].properties.summary;
+        
+        setRoutePoints(coords);
+        setRouteInfo({
+          distance: (summary.distance / 1000).toFixed(2),
+          duration: Math.round(summary.duration / 60)
+        });
+        
+        // Zoom để thấy toàn bộ route
+        if (mapRef.current && coords.length > 0) {
+          const bounds = L.latLngBounds(coords);
+          mapRef.current.fitBounds(bounds, { padding: [50, 50] });
+        }
+      } else {
+        setRoutePoints([]);
+        setRouteInfo(null);
+        alert('Không thể tính đường đi!');
+      }
+    } catch (error) {
+      console.error('Lỗi route:', error);
+      alert('Lỗi tính đường đi!');
+      setRoutePoints([]);
+      setRouteInfo(null);
+    }
+  };
+
+  // Chọn địa điểm
+  const selectPlace = (place) => {
+    const lat = parseFloat(place.lat);
+    const lng = parseFloat(place.lon);
+    const name = formatPlaceName(place.display_name);
+    
+    setSearchQuery(name);
+    setSelectedLocation({ lat, lng, name });
+    setSuggestions([]);
+    setShowSuggestions(false);
+    
+    addMarker(lat, lng, name);
+    
+    // Fly to location
+    if (mapRef.current) {
+      mapRef.current.flyTo([lat, lng], 16);
+    }
+    
+    // Nếu có vị trí bắt đầu mặc định, tính route
+    // Dùng điểm mặc định ở Đà Nẵng làm điểm bắt đầu
+    const startLat = DEFAULT_CENTER[0];
+    const startLng = DEFAULT_CENTER[1];
+    calculateRoute(startLat, startLng, lat, lng);
+  };
+
+  // Clear all
   const clearAll = () => {
     setSearchQuery('');
-    setDestination(null);
+    setSelectedLocation(null);
+    setSuggestions([]);
+    setShowSuggestions(false);
     setRoutePoints([]);
     setRouteInfo(null);
-    setShowSuggestions(false);
-    Object.values(roadPolylinesRef.current).forEach(p => p.setStyle({ opacity: 0 }));
+    clearMarker();
+    
+    if (mapRef.current) {
+      mapRef.current.setView(DEFAULT_CENTER, 14);
+    }
+  };
+
+  // Xử lý submit form
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (searchQuery.trim()) {
+      searchLocation(searchQuery);
+    }
   };
 
   return (
-    <div className="relative h-screen w-full overflow-hidden">
-      <MapContainer center={userLocation} zoom={14} style={{ height: '100%', width: '100%' }} ref={mapRef} whenReady={(e) => initializeRoads(e.target)}>
-        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+    <div className="relative h-screen w-full">
+      <MapContainer
+        center={DEFAULT_CENTER}
+        zoom={14}
+        style={{ height: '100%', width: '100%' }}
+        ref={mapRef}
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='© OpenStreetMap contributors'
+        />
         <ZoomControl position="bottomright" />
-
-        {routePoints.length > 0 && <Polyline positions={routePoints} color={transport === 'motorcycle' ? "#ff6b6b" : "#3388ff"} weight={7} opacity={0.85} />}
-
-        <Marker position={userLocation} icon={userIcon} />
-        {destination && <Marker position={destination} icon={destinationIcon} />}
+        
+        {routePoints.length > 0 && (
+          <Polyline
+            positions={routePoints}
+            color={routeColors[transport]}
+            weight={6}
+            opacity={0.8}
+          />
+        )}
       </MapContainer>
 
       {/* Search Bar */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[1000] w-full max-w-xl px-4">
-        <form onSubmit={handleSearch}>
-          <div className="flex h-14 rounded-2xl bg-white shadow-2xl px-5 items-center border border-slate-200">
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-full max-w-lg px-4">
+        <form onSubmit={handleSubmit} className="relative">
+          <div className="flex h-12 rounded-full bg-white shadow-lg border border-gray-200 overflow-hidden">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onFocus={() => setShowSuggestions(true)}
-              placeholder="Tìm đường hoặc địa điểm tại Đà Nẵng..."
-              className="flex-1 bg-transparent outline-none text-base placeholder-slate-400"
+              onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+              placeholder="Tìm địa chỉ, đường phố tại Đà Nẵng..."
+              className="flex-1 px-5 outline-none text-sm"
             />
-            {searchQuery && <button type="button" onClick={clearAll} className="mr-3 text-slate-400 hover:text-red-500">✕</button>}
-            <button type="submit" className="text-blue-600 hover:text-blue-700">🔍</button>
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={clearAll}
+                className="px-3 text-gray-400 hover:text-red-500"
+              >
+                ✕
+              </button>
+            )}
+            <button
+              type="submit"
+              className="px-5 bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+              disabled={isSearching}
+            >
+              {isSearching ? '...' : '🔍'}
+            </button>
           </div>
-
+          
           {/* Suggestions */}
           {showSuggestions && suggestions.length > 0 && (
-            <div className="absolute top-16 w-full bg-white rounded-2xl shadow-2xl max-h-96 overflow-auto z-50 border">
-              {suggestions.map((place, i) => (
-                <div key={i} onClick={() => selectSuggestion(place)} className="px-5 py-3 hover:bg-blue-50 cursor-pointer border-b last:border-none">
-                  <div className="font-medium">{place.shortName}</div>
-                  <div className="text-sm text-slate-500 truncate">{place.display_name}</div>
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-xl max-h-80 overflow-auto z-50">
+              {suggestions.map((place, index) => (
+                <div
+                  key={index}
+                  onClick={() => selectPlace(place)}
+                  className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b last:border-none"
+                >
+                  <div className="font-medium text-sm">
+                    {formatPlaceName(place.display_name)}
+                  </div>
+                  <div className="text-xs text-gray-500 truncate">
+                    {place.display_name}
+                  </div>
                 </div>
               ))}
             </div>
@@ -283,49 +310,65 @@ const calculateAndDrawRoute = useCallback(async (start, end) => {
         </form>
       </div>
 
-            {/* Nút chọn phương tiện - Đặt nổi bật */}
-      <div className="absolute top-24 right-6 z-[1000] bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl p-2 border border-slate-200">
-        <div className="flex flex-col gap-1.5">
+      {/* Transport Selector */}
+      <div className="absolute bottom-6 right-4 z-[1000] bg-white rounded-2xl shadow-lg p-2 border border-gray-200">
+        <div className="flex gap-2">
           {[
-            { key: 'motorcycle', label: 'Xe máy', icon: 'two_wheeler', color: 'text-orange-500' },
-            { key: 'car', label: 'Ô tô', icon: 'directions_car', color: 'text-blue-600' },
-            { key: 'walking', label: 'Đi bộ', icon: 'directions_walk', color: 'text-emerald-600' }
+            { key: 'motorcycle', label: '🏍️ Xe máy' },
+            { key: 'car', label: '🚗 Ô tô' },
+            { key: 'walking', label: '🚶 Đi bộ' }
           ].map(item => (
             <button
               key={item.key}
               onClick={() => setTransport(item.key)}
-              className={`flex items-center gap-3 px-6 py-3 rounded-2xl font-medium transition-all ${
-                transport === item.key 
-                  ? 'bg-blue-600 text-white shadow-lg' 
-                  : 'hover:bg-slate-100 text-slate-700'
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                transport === item.key
+                  ? 'bg-blue-500 text-white shadow-md'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              <span className={`material-symbols-outlined text-2xl ${item.color}`}>{item.icon}</span>
-              <span>{item.label}</span>
+              {item.label}
             </button>
           ))}
         </div>
       </div>
 
       {/* Route Info */}
-      {routeInfo && (
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-white rounded-2xl shadow-2xl px-8 py-4 z-50 text-center border">
-          <div className="flex gap-8">
-            <div>
-              <div className="text-xs text-slate-500">Khoảng cách</div>
-              <div className="text-2xl font-bold text-blue-600">{routeInfo.distance} km</div>
+      {routeInfo && selectedLocation && (
+        <div className="absolute bottom-6 left-4 right-4 z-[1000] max-w-md mx-auto">
+          <div className="bg-white rounded-2xl shadow-xl p-4 border border-gray-200">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-gray-800">📍 {selectedLocation.name}</h3>
+              <button onClick={clearAll} className="text-gray-400 hover:text-red-500">
+                ✕
+              </button>
             </div>
-            <div>
-              <div className="text-xs text-slate-500">Thời gian</div>
-              <div className="text-2xl font-bold text-blue-600">{routeInfo.duration} phút</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Phương tiện</div>
-              <div className="text-xl font-medium">{routeInfo.mode}</div>
+            <div className="flex gap-6">
+              <div>
+                <div className="text-xs text-gray-500">Khoảng cách</div>
+                <div className="text-xl font-bold text-blue-600">{routeInfo.distance} km</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Thời gian</div>
+                <div className="text-xl font-bold text-blue-600">{routeInfo.duration} phút</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Phương tiện</div>
+                <div className="text-sm font-medium text-gray-700">
+                  {transport === 'motorcycle' ? '🏍️ Xe máy' : transport === 'car' ? '🚗 Ô tô' : '🚶 Đi bộ'}
+                </div>
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Instruction */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] pointer-events-none">
+        <div className="bg-black/50 text-white text-xs px-3 py-1 rounded-full">
+          🔍 Tìm kiếm địa chỉ để xem đường đi
+        </div>
+      </div>
     </div>
   );
 }
