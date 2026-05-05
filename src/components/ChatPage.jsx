@@ -1,7 +1,21 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 // ==================== 🔑 NHẬP API KEY CỦA BẠN VÀO ĐÂY ====================
-const GROQ_API_KEY = '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';
+// ==================== 🔑 API KEY ====================
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+
+console.log("🔍 VITE_GROQ_API_KEY loaded:", !!GROQ_API_KEY);
+if (GROQ_API_KEY) {
+  console.log("📏 Độ dài key:", GROQ_API_KEY.length);
+  console.log("🔑 Key bắt đầu bằng:", GROQ_API_KEY.substring(0, 10) + "...");
+} else {
+  console.error("❌ Không tìm thấy GROQ_API_KEY trong .env");
+}
+
+if (!GROQ_API_KEY || GROQ_API_KEY.length < 30) {
+  console.error("❌ API Key bị thiếu hoặc quá ngắn!");
+}
+// ================================================
 // ======================================================================
 
 const ChatPage = () => {
