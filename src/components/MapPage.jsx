@@ -2,13 +2,16 @@ import { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
-// Fix Leaflet icons
 delete L.Icon.Default.prototype._getIconUrl;
+
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
 });
 
 // Điểm mặc định (trung tâm Đà Nẵng)
@@ -27,6 +30,7 @@ export default function SimpleMap() {
   const [routePoints, setRoutePoints] = useState([]);
   const [routeInfo, setRouteInfo] = useState(null);
   const [transport, setTransport] = useState('motorcycle');
+  const [currentLocation, setCurrentLocation] = useState(null);
   
   const mapRef = useRef(null);
   const searchTimeoutRef = useRef(null);
@@ -75,10 +79,7 @@ export default function SimpleMap() {
       if (data && data.length > 0) {
         setSuggestions(data);
         setShowSuggestions(true);
-      } else {
-        setSuggestions([]);
-        alert('Không tìm thấy địa điểm!');
-      }
+      } 
     } catch (error) {
       console.error('Lỗi tìm kiếm:', error);
       alert('Lỗi kết nối!');
@@ -86,6 +87,53 @@ export default function SimpleMap() {
       setIsSearching(false);
     }
   };
+
+  // Lấy vị trí hiện tại bằng GPS
+useEffect(() => {
+  if (!navigator.geolocation) {
+    alert('Trình duyệt không hỗ trợ GPS');
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+
+      setCurrentLocation({ lat, lng });
+
+      // Di chuyển map đến vị trí hiện tại
+      if (mapRef.current) {
+        mapRef.current.flyTo([lat, lng], 15);
+
+        // Icon GPS
+        const userIcon = L.divIcon({
+          className: 'user-location-icon',
+          html: `
+            <div class="relative">
+              <div class="w-5 h-5 bg-blue-500 rounded-full border-4 border-white shadow-lg"></div>
+            </div>
+          `,
+          iconSize: [20, 20],
+          iconAnchor: [10, 10]
+        });
+
+        // Marker vị trí hiện tại
+        L.marker([lat, lng], { icon: userIcon })
+          .addTo(mapRef.current)
+          .bindPopup('📍 Bạn đang ở đây')
+          .openPopup();
+      }
+    },
+    (error) => {
+      console.error('Lỗi GPS:', error);
+      alert('Không thể lấy vị trí hiện tại');
+    },
+    {
+      enableHighAccuracy: true
+    }
+  );
+}, []);
 
   // Debounce search
   useEffect(() => {
@@ -120,24 +168,30 @@ export default function SimpleMap() {
 
   // Thêm marker mới
   const addMarker = (lat, lng, name) => {
-    clearMarker();
-    
-    const customIcon = L.divIcon({
-      className: 'custom-div-icon',
-      html: `<div class="relative">
-               <div class="relative flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-red-600 shadow-lg border-2 border-white">
-                 <span class="text-white text-sm">📍</span>
-               </div>
-             </div>`,
-      iconSize: [32, 32],
-      iconAnchor: [16, 32]
-    });
-    
-    markerRef.current = L.marker([lat, lng], { icon: customIcon })
-      .addTo(mapRef.current)
-      .bindPopup(name)
-      .openPopup();
-  };
+  if (!mapRef.current) return;
+
+  clearMarker();
+
+  const customIcon = L.divIcon({
+    className: 'custom-div-icon',
+    html: `
+      <div class="relative">
+        <div class="relative flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-red-600 shadow-lg border-2 border-white">
+          <span class="text-white text-sm">📍</span>
+        </div>
+      </div>
+    `,
+    iconSize: [32, 32],
+    iconAnchor: [16, 32]
+  });
+
+  markerRef.current = L.marker([lat, lng], { icon: customIcon });
+
+  markerRef.current
+    .addTo(mapRef.current)
+    .bindPopup(name)
+    .openPopup();
+};
 
   // Tính route
   const calculateRoute = async (startLat, startLng, endLat, endLng) => {
@@ -206,9 +260,17 @@ export default function SimpleMap() {
     
     // Nếu có vị trí bắt đầu mặc định, tính route
     // Dùng điểm mặc định ở Đà Nẵng làm điểm bắt đầu
-    const startLat = DEFAULT_CENTER[0];
-    const startLng = DEFAULT_CENTER[1];
-    calculateRoute(startLat, startLng, lat, lng);
+    // Dùng GPS hiện tại làm điểm bắt đầu
+    if (currentLocation) {
+      calculateRoute(
+        currentLocation.lat,
+        currentLocation.lng,
+        lat,
+        lng
+      );
+    } else {
+      alert('Chưa lấy được vị trí hiện tại!');
+    }
   };
 
   // Clear all
@@ -247,6 +309,11 @@ export default function SimpleMap() {
           attribution='© OpenStreetMap contributors'
         />
         <ZoomControl position="bottomright" />
+        {currentLocation && (
+          <Marker position={[currentLocation.lat, currentLocation.lng]}>
+            <Popup>📍 Bạn đang ở đây</Popup>
+          </Marker>
+        )}
         
         {routePoints.length > 0 && (
           <Polyline
