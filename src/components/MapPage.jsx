@@ -5,6 +5,7 @@ import 'leaflet/dist/leaflet.css';
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+import { decode } from '@here/flexpolyline';
 
 delete L.Icon.Default.prototype._getIconUrl;
 
@@ -17,8 +18,7 @@ L.Icon.Default.mergeOptions({
 // Điểm mặc định (trung tâm Đà Nẵng)
 const DEFAULT_CENTER = [16.0544, 108.2022];
 
-// ORS API Key
-const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImJhZmMzZTc1ZWM2YjRiZjA4ZDRkMDA3YTM5ZTNlYzg1IiwiaCI6Im11cm11cjY0In0=";
+const HERE_API_KEY = "3Rj5CVhby5-KTg-1_cPDReRt9bhxStQV7XQOlZFmb3Q";
 
 export default function SimpleMap() {
   // State
@@ -36,11 +36,15 @@ export default function SimpleMap() {
   const searchTimeoutRef = useRef(null);
   const markerRef = useRef(null);
 
+  const [trafficData, setTrafficData] = useState({});
+
+  const [visibleTrafficLines, setVisibleTrafficLines] = useState([]);
+
   // Profile mapping
   const profileMap = {
-    motorcycle: 'cycling-regular',
-    car: 'driving-car',
-    walking: 'foot-walking'
+    motorcycle: 'scooter',
+    car: 'car',
+    walking: 'pedestrian'
   };
 
   // Route colors
@@ -55,6 +59,112 @@ export default function SimpleMap() {
     const parts = displayName.split(',');
     return parts.slice(0, 2).join(',');
   };
+
+  const roadSegments = {
+  "Camera 1 - Giao lộ Nguyễn Văn Linh": [
+    [16.058777, 108.206503],
+    [16.059488, 108.208627],
+    [16.060692, 108.216996],
+    [16.060962, 108.223497],
+  ],
+
+  "Camera 2 - Hoàng Diệu": [
+    [16.056889, 108.217100],
+    [16.060590, 108.217049],
+    [16.063148, 108.217911],
+  ],
+
+  "Camera 3 - Nguyễn Tri Phương": [
+    [16.065592, 108.202696],
+    [16.062846, 108.203921],
+    [16.060829, 108.205152],
+    [16.058867, 108.206116],
+  ],
+
+  "Camera 4 - lê duẫn": [
+  [16.066322, 108.206841],
+  [16.069449, 108.209731],
+  [16.070944, 108.216930],
+  [16.071774, 108.224000],
+  ]
+};
+
+const getTrafficColor = (traffic) => {
+
+  switch (traffic) {
+
+    case 'TAC NGHEN':
+      return '#ff0000';
+
+    case 'DONG':
+      return '#ff8800';
+
+    default:
+      return '#00cc66';
+  }
+};
+
+const distanceToSegment = (p, v, w) => {
+  const l2 =
+    Math.pow(v[0] - w[0], 2) +
+    Math.pow(v[1] - w[1], 2);
+
+  if (l2 === 0) return Math.sqrt(
+    Math.pow(p[0] - v[0], 2) +
+    Math.pow(p[1] - v[1], 2)
+  );
+
+  let t =
+    ((p[0] - v[0]) * (w[0] - v[0]) +
+     (p[1] - v[1]) * (w[1] - v[1])) / l2;
+
+  t = Math.max(0, Math.min(1, t));
+
+  const projection = [
+    v[0] + t * (w[0] - v[0]),
+    v[1] + t * (w[1] - v[1])
+  ];
+
+  return Math.sqrt(
+    Math.pow(p[0] - projection[0], 2) +
+    Math.pow(p[1] - projection[1], 2)
+  );
+};
+
+const detectVisibleTrafficLines = (routeCoords) => {
+
+  const visible = [];
+
+  Object.entries(roadSegments).forEach(([cameraKey, segment]) => {
+
+    let matched = false;
+
+    routeCoords.forEach((routePoint) => {
+
+      for (let i = 0; i < segment.length - 1; i++) {
+
+        const dist = distanceToSegment(
+          routePoint,
+          segment[i],
+          segment[i + 1]
+        );
+
+        if (dist < 0.0001) {
+          matched = true;
+          break;
+        }
+      }
+
+    });
+
+    if (matched) {
+      visible.push(cameraKey);
+    }
+
+  });
+
+  setVisibleTrafficLines(visible);
+};
 
   // Tìm kiếm địa điểm
   const searchLocation = async (query) => {
@@ -87,6 +197,41 @@ export default function SimpleMap() {
       setIsSearching(false);
     }
   };
+
+  useEffect(() => {
+  if (selectedLocation && currentLocation) {
+    calculateRoute(
+      currentLocation.lat,
+      currentLocation.lng,
+      selectedLocation.lat,
+      selectedLocation.lng
+    );
+  }
+}, [transport]);
+
+
+useEffect(() => {
+
+  const fetchTraffic = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/traffic');
+
+      const data = await response.json();
+
+      setTrafficData(data);
+
+    } catch (err) {
+      console.error('Traffic fetch error:', err);
+    }
+  };
+
+  fetchTraffic();
+
+  const interval = setInterval(fetchTraffic, 3000);
+
+  return () => clearInterval(interval);
+
+}, []);
 
   // Lấy vị trí hiện tại bằng GPS
 useEffect(() => {
@@ -195,50 +340,61 @@ useEffect(() => {
 
   // Tính route
   const calculateRoute = async (startLat, startLng, endLat, endLng) => {
-    const profile = profileMap[transport];
-    
-    try {
-      const response = await fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
-        method: 'POST',
-        headers: {
-          'Authorization': ORS_API_KEY,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          coordinates: [[startLng, startLat], [endLng, endLat]],
-          preference: 'recommended'
-        })
+  const profile = profileMap[transport];
+
+  try {
+    const url =
+      `https://router.hereapi.com/v8/routes` +
+      `?transportMode=${profile}` +
+      `&origin=${startLat},${startLng}` +
+      `&destination=${endLat},${endLng}` +
+      `&return=polyline,summary` +
+      `&apikey=${HERE_API_KEY}`;
+
+    const response = await fetch(url);
+
+    const data = await response.json();
+
+    if (data.routes && data.routes.length > 0) {
+      const section = data.routes[0].sections[0];
+
+      // Decode polyline
+      const decoded = decode(section.polyline);
+
+      const coords = decoded.polyline.map(point => [
+        point[0],
+        point[1]
+      ]);
+
+      setRoutePoints(coords);
+      detectVisibleTrafficLines(coords);
+
+      setRouteInfo({
+        distance: (section.summary.length / 1000).toFixed(2),
+        duration: Math.round(section.summary.duration / 60)
       });
-      
-      const data = await response.json();
-      
-      if (data.features && data.features.length > 0) {
-        const coords = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
-        const summary = data.features[0].properties.summary;
-        
-        setRoutePoints(coords);
-        setRouteInfo({
-          distance: (summary.distance / 1000).toFixed(2),
-          duration: Math.round(summary.duration / 60)
+
+      // Zoom fit route
+      if (mapRef.current && coords.length > 0) {
+        const bounds = L.latLngBounds(coords);
+
+        mapRef.current.fitBounds(bounds, {
+          padding: [50, 50]
         });
-        
-        // Zoom để thấy toàn bộ route
-        if (mapRef.current && coords.length > 0) {
-          const bounds = L.latLngBounds(coords);
-          mapRef.current.fitBounds(bounds, { padding: [50, 50] });
-        }
-      } else {
-        setRoutePoints([]);
-        setRouteInfo(null);
-        alert('Không thể tính đường đi!');
       }
-    } catch (error) {
-      console.error('Lỗi route:', error);
-      alert('Lỗi tính đường đi!');
+
+    } else {
       setRoutePoints([]);
       setRouteInfo(null);
+      setVisibleTrafficLines([]);
+      alert('Không tìm thấy đường đi!');
     }
-  };
+
+  } catch (error) {
+    console.error('HERE Route Error:', error);
+    alert('Lỗi HERE Routing!');
+  }
+};
 
   // Chọn địa điểm
   const selectPlace = (place) => {
@@ -282,6 +438,7 @@ useEffect(() => {
     setRoutePoints([]);
     setRouteInfo(null);
     clearMarker();
+    setVisibleTrafficLines([]);
     
     if (mapRef.current) {
       mapRef.current.setView(DEFAULT_CENTER, 14);
@@ -323,6 +480,29 @@ useEffect(() => {
             opacity={0.8}
           />
         )}
+
+
+  {Object.entries(roadSegments)
+  .filter(([cameraKey]) =>
+    visibleTrafficLines.includes(cameraKey)
+  )
+  .map(([cameraKey, positions]) => {
+
+    const traffic = trafficData[cameraKey]?.traffic;
+
+    return (
+      <Polyline
+        key={cameraKey}
+        positions={positions}
+        pathOptions={{
+          color: getTrafficColor(traffic),
+          weight: 10,
+          opacity: 0.8
+        }}
+      />
+    );
+  })}
+
       </MapContainer>
 
       {/* Search Bar */}
