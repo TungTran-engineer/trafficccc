@@ -31,6 +31,8 @@ export default function SimpleMap() {
   const [routeInfo, setRouteInfo] = useState(null);
   const [transport, setTransport] = useState('motorcycle');
   const [currentLocation, setCurrentLocation] = useState(null);
+
+  const [draggableMarker, setDraggableMarker] = useState(null);
   
   const mapRef = useRef(null);
   const searchTimeoutRef = useRef(null);
@@ -39,6 +41,8 @@ export default function SimpleMap() {
   const [trafficData, setTrafficData] = useState({});
 
   const [visibleTrafficLines, setVisibleTrafficLines] = useState([]);
+
+  const [smartRouting, setSmartRouting] = useState(false);
 
   // Profile mapping
   const profileMap = {
@@ -104,6 +108,82 @@ const getTrafficColor = (traffic) => {
   }
 };
 
+
+const getTrafficCost = (traffic) => {
+  switch (traffic) {
+    case 'TAC NGHEN':
+      return 50;   // tránh cực mạnh
+    case 'DONG':
+      return 15;   // hạn chế
+    default:
+      return 1;    // bình thường
+  }
+};
+
+const buildAvoidAreas = () => {
+  return Object.entries(roadSegments)
+    .map(([cameraKey, segment]) => {
+      const traffic = trafficData[cameraKey]?.traffic;
+
+      // chỉ né khi tắc nghẽn
+      if (traffic === 'TAC NGHEN') {
+        const lats = segment.map(p => p[0]);
+        const lngs = segment.map(p => p[1]);
+
+        const minLat = Math.min(...lats);
+        const maxLat = Math.max(...lats);
+        const minLng = Math.min(...lngs);
+        const maxLng = Math.max(...lngs);
+
+        const padding = 0.003; // ~300m
+
+        return `bbox:${minLat - padding},${minLng - padding},${maxLat + padding},${maxLng + padding}`;
+      }
+
+      return null;
+    })
+    .filter(Boolean)
+    .join('|');
+};
+
+const calculateRouteCost = (coords) => {
+  let totalCost = 0;
+  let hasCongestion = false; // 👈 THÊM
+
+  Object.entries(roadSegments).forEach(([cameraKey, segment]) => {
+    const traffic = trafficData[cameraKey]?.traffic;
+    const cost = traffic ? getTrafficCost(traffic) : 0;
+
+    coords.forEach((routePoint) => {
+      for (let i = 0; i < segment.length - 1; i++) {
+        const dist = distanceToSegment(
+          routePoint,
+          segment[i],
+          segment[i + 1]
+        );
+
+        if (dist < 0.0005) {
+
+          // 👇 THÊM ĐOẠN NÀY
+          if (traffic === 'TAC NGHEN') {
+            hasCongestion = true;
+          }
+
+          totalCost += cost * 5;
+        }
+      }
+    });
+  });
+
+  // 👇 PHẠT CỰC MẠNH nếu có tắc nghẽn
+  if (hasCongestion) {
+    totalCost += 200;
+  }
+
+  return totalCost;
+};
+
+
 const distanceToSegment = (p, v, w) => {
   const l2 =
     Math.pow(v[0] - w[0], 2) +
@@ -129,6 +209,25 @@ const distanceToSegment = (p, v, w) => {
     Math.pow(p[0] - projection[0], 2) +
     Math.pow(p[1] - projection[1], 2)
   );
+};
+
+// 🔥 DÁN NGAY DƯỚI ĐÂY
+const isRoutePassingCongestion = (coords) => {
+  for (let [cameraKey, segment] of Object.entries(roadSegments)) {
+    const traffic = trafficData[cameraKey]?.traffic;
+
+    if (traffic === 'TAC NGHEN') {
+      for (let point of coords) {
+        for (let i = 0; i < segment.length - 1; i++) {
+          const dist = distanceToSegment(point, segment[i], segment[i + 1]);
+          if (dist < 0.0005) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
 };
 
 const detectVisibleTrafficLines = (routeCoords) => {
@@ -167,32 +266,31 @@ const detectVisibleTrafficLines = (routeCoords) => {
 };
 
   // Tìm kiếm địa điểm
+  // Tìm kiếm địa điểm dùng HERE Geocoding (chính xác hơn)
   const searchLocation = async (query) => {
     if (!query.trim()) return;
-    
     setIsSearching(true);
-    
     try {
-      const searchUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+      const geocodeUrl = `https://geocode.search.hereapi.com/v1/geocode?q=${encodeURIComponent(
         query + ', Đà Nẵng, Việt Nam'
-      )}&format=json&limit=5&addressdetails=1&countrycodes=vn`;
-      
-      const response = await fetch(searchUrl, {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'TrafficMapApp/1.0'
-        }
-      });
-      
+      )}&apiKey=${HERE_API_KEY}&limit=5`;
+      const response = await fetch(geocodeUrl);
       const data = await response.json();
-      
-      if (data && data.length > 0) {
-        setSuggestions(data);
+      if (data.items && data.items.length > 0) {
+        const suggestionsFormatted = data.items.map(item => ({
+          lat: item.position.lat,
+          lon: item.position.lng,
+          display_name: item.address.label,
+          title: item.title
+        }));
+        setSuggestions(suggestionsFormatted);
         setShowSuggestions(true);
-      } 
+      } else {
+        setSuggestions([]);
+      }
     } catch (error) {
-      console.error('Lỗi tìm kiếm:', error);
-      alert('Lỗi kết nối!');
+      console.error('HERE Geocoding error:', error);
+      alert('Không thể tìm kiếm địa điểm');
     } finally {
       setIsSearching(false);
     }
@@ -207,7 +305,7 @@ const detectVisibleTrafficLines = (routeCoords) => {
       selectedLocation.lng
     );
   }
-}, [transport]);
+}, [transport, trafficData, smartRouting]);
 
 
 useEffect(() => {
@@ -338,61 +436,109 @@ useEffect(() => {
     .openPopup();
 };
 
+const TIME_WEIGHT = 1;
+const TRAFFIC_WEIGHT = 2;
+
+const score = (duration, trafficCost) => {
+  return duration * TIME_WEIGHT + trafficCost * TRAFFIC_WEIGHT;
+};
+
   // Tính route
-  const calculateRoute = async (startLat, startLng, endLat, endLng) => {
+const calculateRoute = async (startLat, startLng, endLat, endLng) => {
   const profile = profileMap[transport];
 
   try {
-    const url =
-      `https://router.hereapi.com/v8/routes` +
-      `?transportMode=${profile}` +
-      `&origin=${startLat},${startLng}` +
-      `&destination=${endLat},${endLng}` +
-      `&return=polyline,summary` +
-      `&apikey=${HERE_API_KEY}`;
+    const avoidAreas = buildAvoidAreas();
 
-    const response = await fetch(url);
+    const baseUrl = `https://router.hereapi.com/v8/routes
+?transportMode=${profile}
+&origin=${startLat},${startLng}
+&destination=${endLat},${endLng}
+&return=polyline,summary
+&traffic=enabled
+${avoidAreas ? `&avoid[areas]=${avoidAreas}` : ''}
+&apikey=${HERE_API_KEY}`;
 
-    const data = await response.json();
+    const baseRes = await fetch(baseUrl);
+    const baseData = await baseRes.json();
 
-    if (data.routes && data.routes.length > 0) {
-      const section = data.routes[0].sections[0];
+    if (!baseData.routes || baseData.routes.length === 0) {
+      throw new Error('No route found');
+    }
 
-      // Decode polyline
-      const decoded = decode(section.polyline);
+    const baseSection = baseData.routes[0].sections[0];
+    const baseCoords = decode(baseSection.polyline).polyline.map(p => [p[0], p[1]]);
+    const baseDistance = baseSection.summary.length / 1000;
+    const baseDuration = baseSection.summary.duration / 60;
 
-      const coords = decoded.polyline.map(point => [
-        point[0],
-        point[1]
-      ]);
+    let bestCoords = baseCoords;
+    let bestDistance = baseDistance;
+    let bestDuration = baseDuration;
 
-      setRoutePoints(coords);
-      detectVisibleTrafficLines(coords);
+    // 🔥 THÊM ĐOẠN NÀY
+    if (isRoutePassingCongestion(baseCoords)) {
+      console.log("❌ BASE route bị tắc → bỏ");
+      bestDuration = Infinity; // ép chọn route khác
+    }
 
-      setRouteInfo({
-        distance: (section.summary.length / 1000).toFixed(2),
-        duration: Math.round(section.summary.duration / 60)
-      });
+    // 🔥 Smart routing vẫn giữ
+    if (smartRouting) {
+      const altUrl = `https://router.hereapi.com/v8/routes
+?transportMode=${profile}
+&origin=${startLat},${startLng}
+&destination=${endLat},${endLng}
+&return=polyline,summary
+&alternatives=5
+&traffic=enabled
+${avoidAreas ? `&avoid[areas]=${avoidAreas}` : ''}
+&apikey=${HERE_API_KEY}`;
 
-      // Zoom fit route
-      if (mapRef.current && coords.length > 0) {
-        const bounds = L.latLngBounds(coords);
+      const altRes = await fetch(altUrl);
+      const altData = await altRes.json();
 
-        mapRef.current.fitBounds(bounds, {
-          padding: [50, 50]
-        });
+      if (altData.routes && altData.routes.length > 1) {
+        for (let i = 1; i < altData.routes.length; i++) {
+        const altSection = altData.routes[i].sections[0];
+        const altCoords = decode(altSection.polyline).polyline.map(p => [p[0], p[1]]);
+        const altDistance = altSection.summary.length / 1000;
+        const altDuration = altSection.summary.duration / 60;
+
+        // 🔥 BỎ route nếu đi qua tắc
+        if (isRoutePassingCongestion(altCoords)) {
+          console.log("❌ bỏ route tắc");
+          continue;
+        }
+
+        const isBetter =
+          altDistance <= baseDistance + 7 &&
+          altDuration <= baseDuration + 3;
+
+        if (isBetter && altDuration < bestDuration) {
+          console.log("✅ chọn route này");
+          bestCoords = altCoords;
+          bestDistance = altDistance;
+          bestDuration = altDuration;
+        }
       }
+      }
+    }
 
-    } else {
-      setRoutePoints([]);
-      setRouteInfo(null);
-      setVisibleTrafficLines([]);
-      alert('Không tìm thấy đường đi!');
+    setRoutePoints(bestCoords);
+    detectVisibleTrafficLines(bestCoords);
+
+    setRouteInfo({
+      distance: bestDistance.toFixed(2),
+      duration: Math.round(bestDuration)
+    });
+
+    if (mapRef.current && bestCoords.length > 0) {
+      const bounds = L.latLngBounds(bestCoords);
+      mapRef.current.fitBounds(bounds, { padding: [50, 50] });
     }
 
   } catch (error) {
     console.error('HERE Route Error:', error);
-    alert('Lỗi HERE Routing!');
+    alert('Không thể tính đường đi');
   }
 };
 
@@ -439,6 +585,11 @@ useEffect(() => {
     setRouteInfo(null);
     clearMarker();
     setVisibleTrafficLines([]);
+
+    if (draggableMarker) {
+    draggableMarker.remove();
+    setDraggableMarker(null);
+    }
     
     if (mapRef.current) {
       mapRef.current.setView(DEFAULT_CENTER, 14);
@@ -556,6 +707,21 @@ useEffect(() => {
           )}
         </form>
       </div>
+
+
+        <div className="absolute top-20 right-4 z-[1000]">
+    <button
+      onClick={() => setSmartRouting(!smartRouting)}
+      className={`px-4 py-2 rounded-xl text-sm font-semibold shadow-lg ${
+        smartRouting
+          ? 'bg-green-500 text-white'
+          : 'bg-gray-200 text-gray-700'
+      }`}
+    >
+      🧠 Smart Route {smartRouting ? 'ON' : 'OFF'}
+    </button>
+      </div>  
+
 
       {/* Transport Selector */}
       <div className="absolute bottom-6 right-4 z-[1000] bg-white rounded-2xl shadow-lg p-2 border border-gray-200">
