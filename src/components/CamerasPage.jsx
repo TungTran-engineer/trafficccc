@@ -22,7 +22,7 @@ const CamerasPage = () => {
   }, []);
 
   return (
-    <div className="p-8 bg-gray-950 min-h-screen text-white">
+    <div className="p-8 bg-gray-950 min-h-screen text-white overflow-y-auto">
       <h1 className="text-4xl font-bold mb-8 text-center">📹 AI Traffic Monitoring - Đà Nẵng</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-7xl mx-auto">
